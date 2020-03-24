@@ -186,7 +186,6 @@ func syncFireFunc(entry *logrus.Entry, hook *ElasticHook) error {
 	_, err := hook.client.
 		Index().
 		Index(hook.index()).
-		Type("log").
 		BodyJson(*createMessage(entry, hook)).
 		Do(hook.ctx)
 
@@ -204,7 +203,6 @@ func makeBulkFireFunc(client *elastic.Client) (fireFunc, error) {
 	return func(entry *logrus.Entry, hook *ElasticHook) error {
 		r := elastic.NewBulkIndexRequest().
 			Index(hook.index()).
-			Type("log").
 			Doc(*createMessage(entry, hook))
 		processor.Add(r)
 		return nil

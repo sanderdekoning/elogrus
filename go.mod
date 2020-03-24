@@ -1,4 +1,4 @@
-module gopkg.in/sohlich/elogrus.v7
+module github.com/sanderdekoning/elogrus
 
 go 1.12
 
