@@ -196,10 +196,9 @@ func syncFireFunc(entry *logrus.Entry, hook *ElasticHook) error {
 func makeBulkFireFunc(client *elastic.Client) (fireFunc, error) {
 	processor, err := client.BulkProcessor().
 		Name("elogrus.v3.bulk.processor").
-		Workers(3).
+		Workers(1).
 		BulkActions(1000).
 		BulkSize(3 << 20).
-		FlushInterval(time.Second * 10).
 		Do(context.Background())
 
 	return func(entry *logrus.Entry, hook *ElasticHook) error {
