@@ -24,6 +24,7 @@ type fireFunc func(entry *logrus.Entry, hook *ElasticHook) error
 // hook for ElasticSearch
 type ElasticHook struct {
 	client    *elastic.Client
+	processor *elastic.BulkProcessor
 	host      string
 	index     IndexNameFunc
 	levels    []logrus.Level
@@ -45,8 +46,8 @@ type message struct {
 // host - host of system
 // level - log level
 // index - name of the index in ElasticSearch
-func NewElasticHook(client *elastic.Client, host string, level logrus.Level, index string) (*ElasticHook, error) {
-	return NewElasticHookWithFunc(client, host, level, func() string { return index })
+func NewElasticHook(client *elastic.Client, processor *elastic.BulkProcessor, host string, level logrus.Level, index string) (*ElasticHook, error) {
+	return NewElasticHookWithFunc(client, processor, host, level, func() string { return index })
 }
 
 // NewAsyncElasticHook creates new  hook with asynchronous log.
@@ -54,8 +55,8 @@ func NewElasticHook(client *elastic.Client, host string, level logrus.Level, ind
 // host - host of system
 // level - log level
 // index - name of the index in ElasticSearch
-func NewAsyncElasticHook(client *elastic.Client, host string, level logrus.Level, index string) (*ElasticHook, error) {
-	return NewAsyncElasticHookWithFunc(client, host, level, func() string { return index })
+func NewAsyncElasticHook(client *elastic.Client, processor *elastic.BulkProcessor, host string, level logrus.Level, index string) (*ElasticHook, error) {
+	return NewAsyncElasticHookWithFunc(client, processor, host, level, func() string { return index })
 }
 
 // NewBulkProcessorElasticHook creates new hook that uses a bulk processor for indexing.
@@ -63,8 +64,8 @@ func NewAsyncElasticHook(client *elastic.Client, host string, level logrus.Level
 // host - host of system
 // level - log level
 // index - name of the index in ElasticSearch
-func NewBulkProcessorElasticHook(client *elastic.Client, host string, level logrus.Level, index string) (*ElasticHook, error) {
-	return NewBulkProcessorElasticHookWithFunc(client, host, level, func() string { return index })
+func NewBulkProcessorElasticHook(client *elastic.Client, host string, processor *elastic.BulkProcessor, level logrus.Level, index string) (*ElasticHook, error) {
+	return NewBulkProcessorElasticHookWithFunc(client, processor, host, level, func() string { return index })
 }
 
 // NewElasticHookWithFunc creates new hook with
@@ -74,8 +75,8 @@ func NewBulkProcessorElasticHook(client *elastic.Client, host string, level logr
 // host - host of system
 // level - log level
 // indexFunc - function providing the name of index
-func NewElasticHookWithFunc(client *elastic.Client, host string, level logrus.Level, indexFunc IndexNameFunc) (*ElasticHook, error) {
-	return newHookFuncAndFireFunc(client, host, level, indexFunc, syncFireFunc)
+func NewElasticHookWithFunc(client *elastic.Client, processor *elastic.BulkProcessor, host string, level logrus.Level, indexFunc IndexNameFunc) (*ElasticHook, error) {
+	return newHookFuncAndFireFunc(client, processor, host, level, indexFunc, syncFireFunc)
 }
 
 // NewAsyncElasticHookWithFunc creates new asynchronous hook with
@@ -85,8 +86,8 @@ func NewElasticHookWithFunc(client *elastic.Client, host string, level logrus.Le
 // host - host of system
 // level - log level
 // indexFunc - function providing the name of index
-func NewAsyncElasticHookWithFunc(client *elastic.Client, host string, level logrus.Level, indexFunc IndexNameFunc) (*ElasticHook, error) {
-	return newHookFuncAndFireFunc(client, host, level, indexFunc, asyncFireFunc)
+func NewAsyncElasticHookWithFunc(client *elastic.Client, processor *elastic.BulkProcessor, host string, level logrus.Level, indexFunc IndexNameFunc) (*ElasticHook, error) {
+	return newHookFuncAndFireFunc(client, processor, host, level, indexFunc, asyncFireFunc)
 }
 
 // NewBulkProcessorElasticHookWithFunc creates new hook with
@@ -97,15 +98,12 @@ func NewAsyncElasticHookWithFunc(client *elastic.Client, host string, level logr
 // host - host of system
 // level - log level
 // indexFunc - function providing the name of index
-func NewBulkProcessorElasticHookWithFunc(client *elastic.Client, host string, level logrus.Level, indexFunc IndexNameFunc) (*ElasticHook, error) {
-	fireFunc, err := makeBulkFireFunc(client)
-	if err != nil {
-		return nil, err
-	}
-	return newHookFuncAndFireFunc(client, host, level, indexFunc, fireFunc)
+func NewBulkProcessorElasticHookWithFunc(client *elastic.Client, processor *elastic.BulkProcessor, host string, level logrus.Level, indexFunc IndexNameFunc) (*ElasticHook, error) {
+	fireFunc := makeBulkFireFunc(client, processor)
+	return newHookFuncAndFireFunc(client, processor, host, level, indexFunc, fireFunc)
 }
 
-func newHookFuncAndFireFunc(client *elastic.Client, host string, level logrus.Level, indexFunc IndexNameFunc, fireFunc fireFunc) (*ElasticHook, error) {
+func newHookFuncAndFireFunc(client *elastic.Client, processor *elastic.BulkProcessor, host string, level logrus.Level, indexFunc IndexNameFunc, fireFunc fireFunc) (*ElasticHook, error) {
 	var levels []logrus.Level
 	for _, l := range []logrus.Level{
 		logrus.PanicLevel,
@@ -144,6 +142,7 @@ func newHookFuncAndFireFunc(client *elastic.Client, host string, level logrus.Le
 
 	return &ElasticHook{
 		client:    client,
+		processor: processor,
 		host:      host,
 		index:     indexFunc,
 		levels:    levels,
@@ -193,21 +192,14 @@ func syncFireFunc(entry *logrus.Entry, hook *ElasticHook) error {
 }
 
 // Create closure with bulk processor tied to fireFunc.
-func makeBulkFireFunc(client *elastic.Client) (fireFunc, error) {
-	processor, err := client.BulkProcessor().
-		Name("elogrus.v3.bulk.processor").
-		Workers(1).
-		BulkActions(1000).
-		BulkSize(3 << 20).
-		Do(context.Background())
-
+func makeBulkFireFunc(client *elastic.Client, processor *elastic.BulkProcessor) fireFunc {
 	return func(entry *logrus.Entry, hook *ElasticHook) error {
 		r := elastic.NewBulkIndexRequest().
 			Index(hook.index()).
 			Doc(*createMessage(entry, hook))
 		processor.Add(r)
 		return nil
-	}, err
+	}
 }
 
 // Levels Required for logrus hook implementation
